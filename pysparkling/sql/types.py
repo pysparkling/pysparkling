@@ -693,26 +693,9 @@ class StructType(DataType):
 
     @classmethod
     def fromDDL(cls, string):
-        def get_class(type_: str) -> DataType:
-            type_to_load = f'{type_.strip().title()}Type'
-
-            if type_to_load not in globals():
-                match = re.match(r'^\s*array\s*<(.*)>\s*$', type_, flags=re.IGNORECASE)
-                if match:
-                    return ArrayType(get_class(match.group(1)))
-
-                raise ValueError(f"Couldn't find '{type_to_load}'?")
-
-            return globals()[type_to_load]()
-
-        fields = StructType()
-
-        for description in string.split(','):
-            name, type_ = [x.strip() for x in description.split(':')]
-
-            fields.add(StructField(name.strip(), get_class(type_), True))
-
-        return fields
+        # pylint: disable=import-outside-toplevel, cyclic-import
+        from .ast.ast_to_python import parse_schema
+        return parse_schema(string)
 
 
 class UserDefinedType(DataType):
@@ -1840,31 +1823,47 @@ STRING_TO_TYPE = dict(
     byte=ByteType(),
     smallint=ShortType(),
     short=ShortType(),
-    int=LongType(),
-    integer=LongType(),
+    int=IntegerType(),
+    integer=IntegerType(),
     bigint=LongType(),
     long=LongType(),
     float=FloatType(),
+    real=FloatType(),
     double=DoubleType(),
     date=DateType(),
     timestamp=TimestampType(),
     string=StringType(),
     binary=BinaryType(),
-    decimal=DecimalType()
+    decimal=DecimalType(),
+    dec=DecimalType(),
+    numeric=DecimalType()
 )
 
 
-def string_to_type(string):
-    if string in STRING_TO_TYPE:
-        return STRING_TO_TYPE[string]
-    if string.startswith("decimal("):
-        arguments = string[8:-1]
-        if arguments.count(",") == 1:
-            precision, scale = arguments.split(",")
+def parsed_string_to_type(data_type, arguments):
+    data_type = data_type.lower()
+    if not arguments and data_type in STRING_TO_TYPE:
+        return STRING_TO_TYPE[data_type]
+    if data_type == "decimal":
+        if len(arguments) == 2:
+            precision, scale = arguments
+        elif len(arguments) == 1:
+            precision, scale = arguments[0], 0
         else:
-            precision, scale = arguments, 0
+            raise ParseException("Unrecognized decimal parameters: {0}".format(arguments))
         return DecimalType(precision=int(precision), scale=int(scale))
-    raise ParseException(f"Unable to parse data type {string}")
+    if data_type == "array" and len(arguments) == 1:
+        return ArrayType(arguments[0])
+    if data_type == "map" and len(arguments) == 2:
+        return MapType(arguments[0], arguments[1])
+    if data_type == "struct" and len(arguments) == 1:
+        return StructType([
+            StructField(name, data_type)
+            for name, data_type in arguments[0]
+        ])
+    raise ParseException(
+        "Unable to parse data type {0}{1}".format(data_type, arguments if arguments else "")
+    )
 
 
 # Internal type hierarchy:
